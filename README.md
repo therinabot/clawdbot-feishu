@@ -66,17 +66,31 @@ channels:
     groupPolicy: "allowlist"
     # Require @mention in groups
     requireMention: true
+    # Max media size in MB (default: 30)
+    mediaMaxMb: 30
+    # Render mode for bot replies: "auto" | "raw" | "card"
+    renderMode: "auto"
 ```
+
+### Render Mode
+
+| Mode | Description |
+|------|-------------|
+| `auto` | (Default) Automatically detect: use card for messages with code blocks or tables, plain text otherwise. |
+| `raw` | Always send replies as plain text. Markdown tables are converted to ASCII. |
+| `card` | Always send replies as interactive cards with full markdown rendering (syntax highlighting, tables, clickable links). |
 
 ## Features
 
 - WebSocket and Webhook connection modes
 - Direct messages and group chats
 - Message replies and quoted message context
-- Image and file uploads
+- **Inbound media support**: AI can see images, read files (PDF, Excel, etc.), and process rich text with embedded images
+- Image and file uploads (outbound)
 - Typing indicator (via emoji reactions)
 - Pairing flow for DM approval
 - User and group directory lookup
+- **Card render mode**: Optional markdown rendering with syntax highlighting
 
 ## License
 
