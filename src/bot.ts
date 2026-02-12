@@ -17,8 +17,8 @@ import {
   isFeishuGroupAllowed,
 } from "./policy.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
-import { getMessageFeishu } from "./send.js";
-import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
+import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { downloadMessageResourceFeishu } from "./media.js";
 import {
   extractMentionTargets,
   extractMessageBody,
@@ -216,20 +216,76 @@ export type FeishuBotAddedEvent = {
   operator_tenant_key?: string;
 };
 
-function parseMessageContent(content: string, messageType: string): string {
+type ParsedFeishuMessageContent = {
+  text: string;
+  placeholder?: string;
+  rawPayload?: string;
+};
+
+type MediaUnderstandingDecisionLike = {
+  capability?: string;
+  outcome?: string;
+  attachments?: Array<{
+    attachmentIndex?: number;
+    attempts?: Array<{
+      type?: string;
+      outcome?: string;
+      reason?: string;
+      provider?: string;
+      model?: string;
+    }>;
+  }>;
+};
+
+function resolveFallbackMimeType(messageType: string): string | undefined {
+  switch (messageType) {
+    case "audio":
+      // Feishu voice messages are typically opus in ogg container.
+      return "audio/ogg; codecs=opus";
+    case "video":
+      return "video/mp4";
+    case "image":
+    case "post":
+      return "image/jpeg";
+    default:
+      return undefined;
+  }
+}
+
+function isGenericMimeType(mime?: string): boolean {
+  if (!mime) return true;
+  const normalized = mime.split(";")[0]?.trim().toLowerCase();
+  return !normalized || normalized === "application/octet-stream";
+}
+
+function parseMessageContent(content: string, messageType: string): ParsedFeishuMessageContent {
+  // Narrow behavior change to audio only:
+  // keep non-audio media payload handling backward-compatible (raw JSON text path).
+  const placeholder = messageType === "audio" ? inferPlaceholder(messageType) : undefined;
   try {
     const parsed = JSON.parse(content);
     if (messageType === "text") {
-      return parsed.text || "";
+      return {
+        text: typeof parsed.text === "string" ? parsed.text : "",
+        rawPayload: content,
+      };
     }
     if (messageType === "post") {
-      // Extract text content from rich text post
+      // Extract text content from rich text post.
       const { textContent } = parsePostContent(content);
-      return textContent;
+      return { text: textContent, rawPayload: content };
     }
-    return content;
+    // Only audio messages use semantic placeholders so core media-understanding can
+    // replace command bodies with transcript outputs.
+    if (placeholder) {
+      return { text: placeholder, placeholder, rawPayload: content };
+    }
+    return { text: content, rawPayload: content };
   } catch {
-    return content;
+    if (placeholder) {
+      return { text: placeholder, placeholder, rawPayload: content };
+    }
+    return { text: content, rawPayload: content };
   }
 }
 
@@ -269,12 +325,12 @@ function parseMediaKeys(
       case "file":
         return { fileKey: parsed.file_key, fileName: parsed.file_name };
       case "audio":
-        return { fileKey: parsed.file_key };
+        return { fileKey: parsed.file_key, fileName: parsed.file_name };
       case "video":
         // Video has both file_key (video) and image_key (thumbnail)
-        return { fileKey: parsed.file_key, imageKey: parsed.image_key };
+        return { fileKey: parsed.file_key, imageKey: parsed.image_key, fileName: parsed.file_name };
       case "sticker":
-        return { fileKey: parsed.file_key };
+        return { fileKey: parsed.file_key, fileName: parsed.file_name };
       default:
         return {};
     }
@@ -347,6 +403,136 @@ function inferPlaceholder(messageType: string): string {
   }
 }
 
+function extractAudioDecisionReasons(decision: MediaUnderstandingDecisionLike): string[] {
+  const reasons = (decision.attachments ?? [])
+    .flatMap((attachment) => attachment.attempts ?? [])
+    .map((attempt) => (typeof attempt.reason === "string" ? attempt.reason.trim() : ""))
+    .filter(Boolean);
+  return Array.from(new Set(reasons));
+}
+
+type AudioFailureResolution = {
+  notice: string;
+  outcome: string;
+  reasons: string[];
+  debugSummary: string;
+};
+
+function resolveExplicitAudioFailure(ctx: {
+  MediaUnderstandingDecisions?: MediaUnderstandingDecisionLike[];
+}): AudioFailureResolution | undefined {
+  const decisions = Array.isArray(ctx.MediaUnderstandingDecisions)
+    ? ctx.MediaUnderstandingDecisions
+    : [];
+  const decision = decisions.find((entry) => entry?.capability === "audio");
+  if (!decision || decision.outcome === "success") {
+    return undefined;
+  }
+
+  const outcome = String(decision.outcome ?? "unknown").toLowerCase();
+  const reasons = extractAudioDecisionReasons(decision).map((value) => value.toLowerCase());
+  const hasReason = (keyword: string) => reasons.some((reason) => reason.includes(keyword));
+  const attempts = (decision.attachments ?? []).flatMap((attachment) => attachment.attempts ?? []);
+  const hasFailedAttempt = attempts.some((attempt) => attempt.outcome === "failed");
+  const hasSkippedAttemptWithReason = attempts.some(
+    (attempt) => attempt.outcome === "skipped" && Boolean(attempt.reason?.trim()),
+  );
+  const hasExplicitFailure =
+    outcome === "disabled" ||
+    outcome === "scope-deny" ||
+    outcome === "no-attachment" ||
+    hasFailedAttempt ||
+    hasSkippedAttemptWithReason;
+  if (!hasExplicitFailure) {
+    return undefined;
+  }
+
+  const attemptSummary = attempts
+    .map((attempt) => {
+      const provider = attempt.provider?.trim() || "unknown";
+      const model = attempt.model?.trim();
+      const status = attempt.outcome?.trim() || "unknown";
+      const reason = attempt.reason?.trim();
+      const modelLabel = model ? `${provider}/${model}` : provider;
+      return `${status}@${modelLabel}${reason ? `(${reason})` : ""}`;
+    })
+    .join("; ");
+
+  const debugSummary = `outcome=${outcome}; reasons=${reasons.join(" | ") || "none"}; attempts=${
+    attemptSummary || "none"
+  }`;
+
+  if (outcome === "disabled") {
+    return {
+      notice: "语音识别已关闭（tools.media.audio.enabled=false），请开启后重试。",
+      outcome,
+      reasons,
+      debugSummary,
+    };
+  }
+  if (outcome === "scope-deny") {
+    return {
+      notice: "当前会话策略禁止语音识别，请改用文字或调整 tools.media.audio.scope。",
+      outcome,
+      reasons,
+      debugSummary,
+    };
+  }
+  if (outcome === "no-attachment") {
+    return {
+      notice: "未读取到可识别的语音附件，请重新发送语音。",
+      outcome,
+      reasons,
+      debugSummary,
+    };
+  }
+  if (hasReason("maxbytes") || hasReason("exceeds")) {
+    return {
+      notice: "语音文件超过大小限制，无法识别。",
+      outcome,
+      reasons,
+      debugSummary,
+    };
+  }
+  if (
+    hasReason("api key") ||
+    (hasReason("provider") && hasReason("not available")) ||
+    hasReason("authentication") ||
+    hasReason("http 401") ||
+    hasReason("http 403")
+  ) {
+    return {
+      notice: "语音识别服务不可用，请检查 tools.media.audio 的 provider 与 API Key 配置。",
+      outcome,
+      reasons,
+      debugSummary,
+    };
+  }
+  if (hasReason("unsupported") || hasReason("mime") || hasReason("format")) {
+    return {
+      notice: "语音格式暂不支持，请重试或改用文字。",
+      outcome,
+      reasons,
+      debugSummary,
+    };
+  }
+  if (outcome === "skipped" && reasons.length === 0) {
+    return {
+      notice: "未找到可用的语音识别模型，请确认已配置 tools.media.audio。",
+      outcome,
+      reasons,
+      debugSummary,
+    };
+  }
+
+  return {
+    notice: "语音识别失败，请稍后重试或改用文字。",
+    outcome,
+    reasons,
+    debugSummary,
+  };
+}
+
 /**
  * Resolve media from a Feishu message, downloading and saving to disk.
  * Similar to Discord's resolveMediaList().
@@ -392,8 +578,12 @@ async function resolveFeishuMediaList(params: {
         });
 
         let contentType = result.contentType;
-        if (!contentType) {
-          contentType = await core.media.detectMime({ buffer: result.buffer });
+        if (!contentType || isGenericMimeType(contentType)) {
+          contentType =
+            (await core.media.detectMime({
+              buffer: result.buffer,
+              headerMime: contentType,
+            })) ?? resolveFallbackMimeType("image");
         }
 
         const saved = await core.channel.media.saveMediaBuffer(
@@ -448,9 +638,17 @@ async function resolveFeishuMediaList(params: {
     contentType = result.contentType;
     fileName = result.fileName || mediaKeys.fileName;
 
-    // Detect mime type if not provided
-    if (!contentType) {
-      contentType = await core.media.detectMime({ buffer });
+    // Detect MIME type and apply message-type fallback when needed.
+    if (!contentType || isGenericMimeType(contentType)) {
+      contentType =
+        (await core.media.detectMime({
+          buffer,
+          headerMime: contentType,
+          filePath: fileName,
+        })) ?? resolveFallbackMimeType(messageType);
+    }
+    if (isGenericMimeType(contentType)) {
+      contentType = resolveFallbackMimeType(messageType) ?? contentType;
     }
 
     // Save to disk using core's saveMediaBuffer
@@ -507,9 +705,9 @@ export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
 ): FeishuMessageContext {
-  const rawContent = parseMessageContent(event.message.content, event.message.message_type);
+  const parsedContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
-  const content = stripBotMention(rawContent, event.message.mentions);
+  const content = stripBotMention(parsedContent.text, event.message.mentions).trim();
 
   const ctx: FeishuMessageContext = {
     chatId: event.message.chat_id,
@@ -522,6 +720,8 @@ export function parseFeishuMessageEvent(
     parentId: event.message.parent_id || undefined,
     content,
     contentType: event.message.message_type,
+    placeholder: parsedContent.placeholder,
+    rawPayload: parsedContent.rawPayload,
   };
 
   // Detect mention forward request: message mentions bot + at least one other user
@@ -754,6 +954,7 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
     const mediaPayload = buildFeishuMediaPayload(mediaList);
+    const isAudioMessage = event.message.message_type === "audio";
 
     // Fetch quoted/replied message content if parentId exists
     let quotedContent: string | undefined;
@@ -919,6 +1120,32 @@ export async function handleFeishuMessage(params: {
     });
 
     markDispatchIdle();
+
+    const didSendReply = (counts.final ?? 0) + (counts.tool ?? 0) + (counts.block ?? 0) > 0;
+
+    if (isAudioMessage && !didSendReply) {
+      const audioFailure = resolveExplicitAudioFailure(ctxPayload);
+      if (audioFailure) {
+        log(
+          `feishu[${account.accountId}]: audio transcription not applied; ${audioFailure.debugSummary}`,
+        );
+        try {
+          await sendMessageFeishu({
+            cfg,
+            to: feishuTo,
+            text: audioFailure.notice,
+            replyToMessageId: ctx.messageId,
+            accountId: account.accountId,
+          });
+        } catch (noticeErr) {
+          log(
+            `feishu[${account.accountId}]: failed to send audio failure notice: ${String(
+              noticeErr,
+            )}`,
+          );
+        }
+      }
+    }
 
     if (isGroup && historyKey && chatHistories) {
       clearHistoryEntriesIfEnabled({
