@@ -375,11 +375,11 @@ function parsePostContent(content: string): {
     }
 
     return {
-      textContent: textContent.trim() || "[富文本消息]",
+      textContent: textContent.trim() || "[rich text message]",
       imageKeys,
     };
   } catch {
-    return { textContent: "[富文本消息]", imageKeys: [] };
+    return { textContent: "[rich text message]", imageKeys: [] };
   }
 }
 
@@ -437,6 +437,8 @@ function resolveExplicitAudioFailure(ctx: {
   const hasSkippedAttemptWithReason = attempts.some(
     (attempt) => attempt.outcome === "skipped" && Boolean(attempt.reason?.trim()),
   );
+  // Only emit a user-facing failure notice when the decision is explicitly negative.
+  // Plain "skipped" without reason is treated as non-actionable/noisy and is ignored.
   const hasExplicitFailure =
     outcome === "disabled" ||
     outcome === "scope-deny" ||
@@ -464,7 +466,7 @@ function resolveExplicitAudioFailure(ctx: {
 
   if (outcome === "disabled") {
     return {
-      notice: "语音识别已关闭（tools.media.audio.enabled=false），请开启后重试。",
+      notice: "Audio transcription is disabled (tools.media.audio.enabled=false). Please enable it and retry.",
       outcome,
       reasons,
       debugSummary,
@@ -472,7 +474,8 @@ function resolveExplicitAudioFailure(ctx: {
   }
   if (outcome === "scope-deny") {
     return {
-      notice: "当前会话策略禁止语音识别，请改用文字或调整 tools.media.audio.scope。",
+      notice:
+        "Audio transcription is blocked by scope policy. Use text input or adjust tools.media.audio.scope.",
       outcome,
       reasons,
       debugSummary,
@@ -480,7 +483,7 @@ function resolveExplicitAudioFailure(ctx: {
   }
   if (outcome === "no-attachment") {
     return {
-      notice: "未读取到可识别的语音附件，请重新发送语音。",
+      notice: "No recognizable audio attachment was found. Please resend the voice message.",
       outcome,
       reasons,
       debugSummary,
@@ -488,7 +491,7 @@ function resolveExplicitAudioFailure(ctx: {
   }
   if (hasReason("maxbytes") || hasReason("exceeds")) {
     return {
-      notice: "语音文件超过大小限制，无法识别。",
+      notice: "Audio file exceeds the configured size limit and cannot be transcribed.",
       outcome,
       reasons,
       debugSummary,
@@ -502,7 +505,8 @@ function resolveExplicitAudioFailure(ctx: {
     hasReason("http 403")
   ) {
     return {
-      notice: "语音识别服务不可用，请检查 tools.media.audio 的 provider 与 API Key 配置。",
+      notice:
+        "Audio transcription provider is unavailable. Check tools.media.audio provider/API key configuration.",
       outcome,
       reasons,
       debugSummary,
@@ -510,7 +514,7 @@ function resolveExplicitAudioFailure(ctx: {
   }
   if (hasReason("unsupported") || hasReason("mime") || hasReason("format")) {
     return {
-      notice: "语音格式暂不支持，请重试或改用文字。",
+      notice: "Audio format is unsupported. Please retry or send text.",
       outcome,
       reasons,
       debugSummary,
@@ -518,7 +522,7 @@ function resolveExplicitAudioFailure(ctx: {
   }
   if (outcome === "skipped" && reasons.length === 0) {
     return {
-      notice: "未找到可用的语音识别模型，请确认已配置 tools.media.audio。",
+      notice: "No available audio transcription model found. Configure tools.media.audio first.",
       outcome,
       reasons,
       debugSummary,
@@ -526,7 +530,7 @@ function resolveExplicitAudioFailure(ctx: {
   }
 
   return {
-    notice: "语音识别失败，请稍后重试或改用文字。",
+    notice: "Audio transcription failed. Please retry or send text.",
     outcome,
     reasons,
     debugSummary,
@@ -578,6 +582,8 @@ async function resolveFeishuMediaList(params: {
         });
 
         let contentType = result.contentType;
+        // Feishu may return empty/generic MIME for message resources; normalize here
+        // so media-understanding gets a stable type and extension.
         if (!contentType || isGenericMimeType(contentType)) {
           contentType =
             (await core.media.detectMime({
@@ -1121,6 +1127,8 @@ export async function handleFeishuMessage(params: {
 
     markDispatchIdle();
 
+    // Avoid false alarms: if any payload was sent successfully, do not emit an extra
+    // transcription-failed notice even when audio decision metadata is negative.
     const didSendReply = (counts.final ?? 0) + (counts.tool ?? 0) + (counts.block ?? 0) > 0;
 
     if (isAudioMessage && !didSendReply) {
