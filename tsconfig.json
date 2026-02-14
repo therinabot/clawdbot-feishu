@@ -3,6 +3,10 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "baseUrl": ".",
+    "paths": {
+      "openclaw/plugin-sdk": ["node_modules/openclaw/dist/plugin-sdk/plugin-sdk/index.d.ts"]
+    },
     "esModuleInterop": true,
     "strict": false,
     "noImplicitAny": false,
