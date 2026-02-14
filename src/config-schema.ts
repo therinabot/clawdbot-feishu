@@ -36,7 +36,7 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
-// Streaming card mode: when enabled, card replies use Feishu Card Kit streaming API.
+// Streaming card mode: default false. When enabled, card replies use Feishu Card Kit streaming API.
 const StreamingModeSchema = z.boolean().optional();
 
 const BlockStreamingCoalesceSchema = z

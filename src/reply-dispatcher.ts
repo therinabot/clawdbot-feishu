@@ -77,7 +77,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId: account.accountId,
   });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  const streamingEnabled = account.config?.streaming === true && renderMode !== "raw";
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
