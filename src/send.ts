@@ -126,6 +126,48 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
+const FEISHU_APP_URL_PATTERN = /https?:\/\/open\.feishu\.cn\/app\/[^\s<>()]+/gi;
+const FEISHU_APP_ANGLE_URL_PATTERN = /<\s*(https?:\/\/open\.feishu\.cn\/app\/[^\s<>()]+)\s*>/gi;
+
+function escapeMarkdownLinkLabel(text: string): string {
+  return text.replace(/[\\[\]`*_]/g, "\\$&");
+}
+
+function buildMarkdownUrl(url: string): string {
+  return `[${escapeMarkdownLinkLabel(url)}](${url})`;
+}
+
+/**
+ * Feishu markdown may break bare app URLs that include underscores.
+ * Convert bare URLs to explicit markdown links so rendering keeps the full URL.
+ */
+function wrapFeishuAppUrls(text: string): string {
+  if (!text) return text;
+  const normalized = text.replace(FEISHU_APP_ANGLE_URL_PATTERN, (_match, url: string) =>
+    buildMarkdownUrl(url),
+  );
+  return normalized.replace(FEISHU_APP_URL_PATTERN, (url: string, offset: number, source: string) => {
+    const before = source[offset - 1] ?? "";
+    const after = source[offset + url.length] ?? "";
+    const before2 = source.slice(Math.max(0, offset - 2), offset);
+
+    // Skip markdown link target ](url) and markdown link label [url]
+    if ((before2 === "](" && after === ")") || (before === "[" && after === "]")) {
+      return url;
+    }
+    return buildMarkdownUrl(url);
+  });
+}
+
+function normalizeFeishuOutboundText(params: { cfg: ClawdbotConfig; text: string }): string {
+  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "feishu",
+  });
+  const converted = getFeishuRuntime().channel.text.convertMarkdownTables(params.text, tableMode);
+  return wrapFeishuAppUrls(converted);
+}
+
 function buildFeishuPostMessagePayload(params: { messageText: string }): {
   content: string;
   msgType: string;
@@ -162,19 +204,15 @@ export async function sendMessageFeishu(params: SendFeishuMessageParams): Promis
   }
 
   const receiveIdType = resolveReceiveIdType(receiveId);
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
 
   // Build message content (with @mention support)
   let rawText = text ?? "";
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
+  const safeMessageText = normalizeFeishuOutboundText({ cfg, text: rawText });
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+  const { content, msgType } = buildFeishuPostMessagePayload({ messageText: safeMessageText });
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
@@ -342,7 +380,7 @@ export async function sendMarkdownCardFeishu(params: {
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
-  const card = buildMarkdownCard(cardText);
+  const card = buildMarkdownCard(wrapFeishuAppUrls(cardText));
   return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
 }
 
@@ -363,13 +401,9 @@ export async function editMessageFeishu(params: {
   }
 
   const client = createFeishuClient(account);
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
+  const safeMessageText = normalizeFeishuOutboundText({ cfg, text: text ?? "" });
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+  const { content, msgType } = buildFeishuPostMessagePayload({ messageText: safeMessageText });
 
   const response = await client.im.message.update({
     path: { message_id: messageId },
