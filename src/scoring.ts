@@ -8,6 +8,7 @@
  */
 
 import type { FeishuMessageContext } from './types.js';
+import { FeishuEmoji, type FeishuEmojiType } from './reactions.js';
 
 export type ScoringDecision = 'REPLY' | 'REACT' | 'NO_REPLY';
 
@@ -255,13 +256,34 @@ function isLateNight(timezone: string): boolean {
   }
 }
 
-function selectReaction(text: string): string {
-  // Choose appropriate emoji based on context
-  if (hasHumor(text)) return '😂';
-  if (isBanter(text)) return '👍';
-  if (hasQuestionMark(text)) return '🤔';
-  if (isCriticalIssue(text)) return '🔥';
+function selectReaction(text: string): FeishuEmojiType {
+  // Choose appropriate Feishu emoji based on context
+  // Using Feishu emoji types from reactions.ts (mapped to native platform emojis)
 
-  const reactions = ['👍', '💡', '🙌', '✅', '🔥'];
+  if (hasHumor(text)) {
+    // Humor → LAUGHING 😂
+    return FeishuEmoji.LAUGHING;
+  }
+  if (isBanter(text)) {
+    // Banter → THUMBSUP 👍
+    return FeishuEmoji.THUMBSUP;
+  }
+  if (hasQuestionMark(text)) {
+    // Question → THINKING 🤔
+    return FeishuEmoji.THINKING;
+  }
+  if (isCriticalIssue(text)) {
+    // Critical issue → FIRE 🔥
+    return FeishuEmoji.FIRE;
+  }
+
+  // Default: random choice from positive reactions
+  const reactions: FeishuEmojiType[] = [
+    FeishuEmoji.THUMBSUP,    // 👍
+    FeishuEmoji.SMILE,        // 😊
+    FeishuEmoji.CLAP,         // 👏
+    FeishuEmoji.FIRE,         // 🔥
+    FeishuEmoji.CHECK,        // ✅
+  ];
   return reactions[Math.floor(Math.random() * reactions.length)];
 }
