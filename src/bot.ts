@@ -28,6 +28,7 @@ import {
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { runWithFeishuToolContext } from "./tools-common/tool-context.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
+import { evaluateMessageScore, type ScoringDecision } from "./scoring.js";
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -537,6 +538,60 @@ export async function handleFeishuMessage(params: {
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
+
+  // --- SCORING SYSTEM (Group Chats Only) ---
+  if (isGroup) {
+    // Get scoring config from feishu config
+    const scoringEnabled = feishuCfg?.scoring?.enabled ?? true;
+
+    if (scoringEnabled) {
+      // Fetch recent messages for "flow rapid" detection
+      let recentMessages: Array<{ sender: string; timestamp: number }> = [];
+
+      if (chatHistories && chatHistories.has(ctx.chatId)) {
+        const history = chatHistories.get(ctx.chatId) ?? [];
+        // Get messages from last 10 seconds
+        const tenSecondsAgo = Date.now() - 10000;
+        recentMessages = history
+          .filter(h => h.timestamp > tenSecondsAgo)
+          .map(h => ({ sender: h.sender, timestamp: h.timestamp }));
+      }
+
+      const scoringResult = evaluateMessageScore({
+        ctx,
+        recentMessages,
+        timezone: feishuCfg?.scoring?.timezone ?? "Asia/Jakarta",
+      });
+
+      const { decision, score, reaction, reasons } = scoringResult;
+
+      log(`feishu[${account.accountId}]: group scoring - score=${score}, decision=${decision}, reasons=[${reasons.join(', ')}]`);
+
+      // NO_REPLY: Skip entirely
+      if (decision === "NO_REPLY") {
+        log(`feishu[${account.accountId}]: skipping message due to low score`);
+        return;
+      }
+
+      // REACT: Send reaction only, don't dispatch to agent
+      if (decision === "REACT" && reaction) {
+        log(`feishu[${account.accountId}]: sending reaction ${reaction} instead of reply`);
+        try {
+          const { addReactionFeishu } = await import("./reactions.js");
+          await addReactionFeishu({
+            cfg,
+            accountId: account.accountId,
+            messageId: ctx.messageId,
+            emoji: reaction,
+          });
+        } catch (err) {
+          log(`feishu[${account.accountId}]: failed to send reaction: ${String(err)}`);
+        }
+        return;
+      }
+    }
+  }
+  // --- END SCORING SYSTEM ---
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({

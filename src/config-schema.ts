@@ -101,6 +101,27 @@ const FeishuToolsConfigSchema = z
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 
+/**
+ * Scoring system configuration for group chat message filtering.
+ *
+ * Purpose: Decide whether to REPLY, REACT, or NO_REPLY to group messages
+ * based on content analysis and context.
+ *
+ * Adapted from AGENTS.md - "Smart Response Logic (Group Chat)"
+ */
+export const ScoringConfigSchema = z
+  .object({
+    enabled: z.boolean().optional().default(true),
+    replyThreshold: z.number().int().min(0).max(10).optional().default(5),
+    reactThreshold: z.number().int().min(0).max(10).optional().default(3),
+    lateNightStart: z.number().int().min(0).max(23).optional().default(23),
+    lateNightEnd: z.number().int().min(0).max(8).optional().default(8),
+    lateNightDisabled: z.boolean().optional().default(true),
+    timezone: z.string().optional().default("Asia/Jakarta"),
+  })
+  .strict()
+  .optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -110,6 +131,7 @@ export const FeishuGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topicSessionMode: TopicSessionModeSchema,
+    scoring: ScoringConfigSchema,
   })
   .strict();
 
@@ -149,6 +171,7 @@ export const FeishuAccountConfigSchema = z
     renderMode: RenderModeSchema,
     streaming: StreamingModeSchema,
     tools: FeishuToolsConfigSchema,
+    scoring: ScoringConfigSchema,
   })
   .strict();
 
@@ -187,6 +210,8 @@ export const FeishuConfigSchema = z
     tools: FeishuToolsConfigSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
+    // Scoring system for group chat filtering
+    scoring: ScoringConfigSchema,
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
