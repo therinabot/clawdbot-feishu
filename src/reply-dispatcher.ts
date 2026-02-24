@@ -9,6 +9,7 @@ import {
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { buildMentionedCardContent, type MentionTarget } from "./mention.js";
+import { chunkFeishuReplyText } from "./text/chunking.js";
 import { normalizeFeishuMarkdownLinks } from "./text/markdown-links.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
@@ -101,6 +102,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
 
+  const chunkReplyText = (text: string) =>
+    chunkFeishuReplyText({
+      text,
+      limit: textChunkLimit,
+      chunkMode,
+      textRuntime: core.channel.text,
+    });
+
   const startStreaming = () => {
     if (!streamingEnabled || streamingStartPromise || streaming) {
       return;
@@ -131,13 +140,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       await streamingStartPromise;
     }
     await partialUpdateQueue;
+
     if (streaming?.isActive()) {
       let text = streamText;
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      await streaming.close(normalizeFeishuMarkdownLinks(text));
+
+      const normalized = normalizeFeishuMarkdownLinks(text);
+      const chunks = chunkReplyText(normalized);
+      const [firstChunk, ...continuations] = chunks;
+
+      await streaming.close(firstChunk ?? normalized);
+
+      for (const chunk of continuations) {
+        await sendMarkdownCardFeishu({
+          cfg,
+          to: chatId,
+          text: chunk,
+          replyToMessageId,
+          accountId,
+        });
+      }
     }
+
     streaming = null;
     streamingStartPromise = null;
     streamText = "";
@@ -180,7 +206,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         let first = true;
         if (useCard) {
-          for (const chunk of core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode)) {
+          for (const chunk of chunkReplyText(text)) {
             await sendMarkdownCardFeishu({
               cfg,
               to: chatId,
@@ -193,11 +219,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         } else {
           const converted = core.channel.text.convertMarkdownTables(text, tableMode);
-          for (const chunk of core.channel.text.chunkTextWithMode(
-            converted,
-            textChunkLimit,
-            chunkMode,
-          )) {
+          for (const chunk of chunkReplyText(converted)) {
             await sendMessageFeishu({
               cfg,
               to: chatId,
