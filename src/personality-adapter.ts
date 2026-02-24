@@ -60,11 +60,18 @@ export function applyStylePresetSafely(text: string, ctx?: AdaptationContext): s
     out = out.replace(/^(noted|oke|okay|siap|sip)[,\s]+/i, "");
   }
 
-  const limit = ctx.style.responseLength === "short" ? 360 : ctx.style.responseLength === "medium" ? 900 : 1800;
+  // Keep personality style lightweight. Do not aggressively truncate content,
+  // because long structured updates (lists/markdown) may get cut and look broken.
+  const limit = ctx.style.responseLength === "short" ? 1200 : ctx.style.responseLength === "medium" ? 2400 : 4000;
   if (out.length > limit) {
     const clipped = out.slice(0, limit);
-    const boundary = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("\n"), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
-    out = (boundary > Math.floor(limit * 0.6) ? clipped.slice(0, boundary + 1) : clipped).trim();
+    const boundary = Math.max(
+      clipped.lastIndexOf("\n"),
+      clipped.lastIndexOf("."),
+      clipped.lastIndexOf("!"),
+      clipped.lastIndexOf("?"),
+    );
+    out = (boundary > Math.floor(limit * 0.7) ? clipped.slice(0, boundary + 1) : clipped).trim();
   }
 
   return out;

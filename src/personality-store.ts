@@ -33,7 +33,7 @@ export function createDefaultPersonalityProfile(userId: string, userName?: strin
     },
     preferences: {
       tone: "casual",
-      responseLength: "short",
+      responseLength: "medium",
       directness: "high",
       reactionPreference: "normal",
     },
