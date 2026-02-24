@@ -29,6 +29,17 @@ import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { runWithFeishuToolContext } from "./tools-common/tool-context.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 import { evaluateMessageScore, type ScoringDecision } from "./scoring.js";
+import { inferPersonalitySignal } from "./personality-infer.js";
+import { buildAdaptationContext } from "./personality-adapter.js";
+import {
+  applySignalToProfile,
+  appendPersonalityEvent,
+  buildFeedbackEvent,
+  loadOrCreatePersonalityProfile,
+  savePersonalityProfile,
+} from "./personality-store.js";
+import { applyFeedback } from "./personality-feedback.js";
+import type { AdaptationContext, PersonalityProfile, PersonalitySignal } from "./types.js";
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -221,6 +232,14 @@ function stripBotMention(text: string, mentions?: FeishuMessageEvent["message"][
     result = result.replace(new RegExp(mention.key, "g"), "").trim();
   }
   return result;
+}
+
+function buildForcedReplyFallback(messageText: string): string {
+  const endpoint = messageText.match(/(\/api\/[^\s`]+)/i)?.[1];
+  if (endpoint) {
+    return `Noted, endpoint \`${endpoint}\` masuk scope test LP mapping. Lanjut verifikasi ya.`;
+  }
+  return "Noted, request lu kebaca dan gua follow up sekarang.";
 }
 
 /**
@@ -538,6 +557,27 @@ export async function handleFeishuMessage(params: {
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
+  let scoringDecision: ScoringDecision | null = null;
+  let scoringScore: number | null = null;
+  let personalityProfile: PersonalityProfile | null = null;
+  let personalitySignal: PersonalitySignal | null = null;
+  let adaptationContext: AdaptationContext | undefined;
+
+  try {
+    personalityProfile = await loadOrCreatePersonalityProfile(ctx.senderOpenId, ctx.senderName);
+    personalitySignal = inferPersonalitySignal({
+      userId: ctx.senderOpenId,
+      userName: ctx.senderName,
+      content: ctx.content,
+    });
+    personalityProfile = applySignalToProfile(personalityProfile, personalitySignal);
+    adaptationContext = buildAdaptationContext({
+      profile: personalityProfile,
+      signal: personalitySignal,
+    });
+  } catch (err) {
+    log(`feishu[${account.accountId}]: personality preload failed: ${String(err)}`);
+  }
 
   // --- SCORING SYSTEM (Group Chats Only) ---
   if (isGroup) {
@@ -561,15 +601,35 @@ export async function handleFeishuMessage(params: {
         ctx,
         recentMessages,
         timezone: feishuCfg?.scoring?.timezone ?? "Asia/Jakarta",
+        adaptationContext,
       });
 
       const { decision, score, reaction, reasons } = scoringResult;
+      scoringDecision = decision;
+      scoringScore = score;
 
       log(`feishu[${account.accountId}]: group scoring - score=${score}, decision=${decision}, reasons=[${reasons.join(', ')}]`);
 
       // NO_REPLY: Skip entirely
       if (decision === "NO_REPLY") {
         log(`feishu[${account.accountId}]: skipping message due to low score`);
+        if (personalityProfile) {
+          const updated = applyFeedback(personalityProfile, {
+            userId: ctx.senderOpenId,
+            messageId: ctx.messageId,
+            outcome: "NO_REPLY",
+            scoreDelta: -1,
+            note: "scoring-no-reply",
+          });
+          await savePersonalityProfile(updated);
+          await appendPersonalityEvent(buildFeedbackEvent({
+            userId: ctx.senderOpenId,
+            messageId: ctx.messageId,
+            outcome: "NO_REPLY",
+            scoreDelta: -1,
+            note: "scoring-no-reply",
+          }));
+        }
         return;
       }
 
@@ -582,10 +642,27 @@ export async function handleFeishuMessage(params: {
             cfg,
             accountId: account.accountId,
             messageId: ctx.messageId,
-            emoji: reaction,
+            emojiType: reaction,
           });
         } catch (err) {
           log(`feishu[${account.accountId}]: failed to send reaction: ${String(err)}`);
+        }
+        if (personalityProfile) {
+          const updated = applyFeedback(personalityProfile, {
+            userId: ctx.senderOpenId,
+            messageId: ctx.messageId,
+            outcome: "REACT",
+            scoreDelta: 0,
+            note: `reaction:${reaction}`,
+          });
+          await savePersonalityProfile(updated);
+          await appendPersonalityEvent(buildFeedbackEvent({
+            userId: ctx.senderOpenId,
+            messageId: ctx.messageId,
+            outcome: "REACT",
+            scoreDelta: 0,
+            note: `reaction:${reaction}`,
+          }));
         }
         return;
       }
@@ -873,6 +950,16 @@ export async function handleFeishuMessage(params: {
       messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
     }
 
+    if (adaptationContext?.systemHint) {
+      messageBody += `\n\n[System: Personality adaptation hint: ${adaptationContext.systemHint}]`;
+    }
+
+    // If scoring already decided this message should be replied to,
+    // force the agent to provide a short helpful reply (not NO_REPLY).
+    if (isGroup && scoringDecision === "REPLY") {
+      messageBody += `\n\n[System: Group scoring decided REPLY${scoringScore !== null ? ` (score=${scoringScore})` : ""}. You must send a concise, helpful reply. Do not output NO_REPLY.]`;
+    }
+
     const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
 
     // If there's a permission error, dispatch a separate notification first
@@ -1002,6 +1089,10 @@ export async function handleFeishuMessage(params: {
       replyToMessageId: ctx.messageId,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
+      adaptationContext,
+      forceReply: isGroup && scoringDecision === "REPLY",
+      forceReplyFallbackText:
+        isGroup && scoringDecision === "REPLY" ? buildForcedReplyFallback(ctx.content) : undefined,
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
@@ -1033,6 +1124,26 @@ export async function handleFeishuMessage(params: {
     }
 
     log(`feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`);
+
+    if (personalityProfile) {
+      const replyOutcome: "REPLY" | "NO_REPLY" = counts.final > 0 || queuedFinal ? "REPLY" : "NO_REPLY";
+      const scoreDelta = replyOutcome === "REPLY" ? 1 : -1;
+      const updated = applyFeedback(personalityProfile, {
+        userId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        outcome: replyOutcome,
+        scoreDelta,
+        note: `dispatch-final:${counts.final}`,
+      });
+      await savePersonalityProfile(updated);
+      await appendPersonalityEvent(buildFeedbackEvent({
+        userId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        outcome: replyOutcome,
+        scoreDelta,
+        note: `dispatch-final:${counts.final}`,
+      }));
+    }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }

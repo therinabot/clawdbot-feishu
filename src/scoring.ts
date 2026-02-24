@@ -7,7 +7,7 @@
  * Logic adapted from AGENTS.md - "Smart Response Logic (Group Chat)"
  */
 
-import type { FeishuMessageContext } from './types.js';
+import type { AdaptationContext, FeishuMessageContext } from './types.js';
 import { FeishuEmoji, type FeishuEmojiType } from './reactions.js';
 
 export type ScoringDecision = 'REPLY' | 'REACT' | 'NO_REPLY';
@@ -24,6 +24,7 @@ interface ScoringParams {
   ctx: FeishuMessageContext;
   recentMessages?: Array<{ sender: string; timestamp: number }>;
   timezone?: string; // e.g., "Asia/Jakarta"
+  adaptationContext?: AdaptationContext;
 }
 
 /**
@@ -43,7 +44,7 @@ export const DEFAULT_SCORING_CONFIG = {
  * Evaluate message score and return decision
  */
 export function evaluateMessageScore(params: ScoringParams): ScoringResult {
-  const { ctx, recentMessages = [], timezone = 'Asia/Jakarta' } = params;
+  const { ctx, recentMessages = [], timezone = 'Asia/Jakarta', adaptationContext } = params;
   const config = DEFAULT_SCORING_CONFIG;
 
   let score = 0;
@@ -96,6 +97,14 @@ export function evaluateMessageScore(params: ScoringParams): ScoringResult {
 
   // --- NEGATIVE SCORE DISABLED (requested) ---
   // Intentionally disabled subtract-point checks.
+
+  // --- PERSONALITY ADJUSTMENT (bounded, safety-neutral) ---
+  // Bounded to max +/-1 so personality cannot dominate core scoring logic.
+  const personalityDelta = computePersonalityDelta(adaptationContext, ctx.content);
+  if (personalityDelta !== 0) {
+    score += personalityDelta;
+    reasons.push(`Personality adjustment (${personalityDelta > 0 ? "+" : ""}${personalityDelta})`);
+  }
 
   // --- DECISION LOGIC ---
 
@@ -213,6 +222,31 @@ function isLateNight(timezone: string): boolean {
   } catch {
     return false;
   }
+}
+
+function computePersonalityDelta(adaptationContext: AdaptationContext | undefined, text: string): number {
+  if (!adaptationContext) return 0;
+
+  const style = adaptationContext.style;
+  let delta = 0;
+
+  if (style.reactionPreference === "high" && isBanter(text)) {
+    delta += 1;
+  }
+
+  if (adaptationContext.stressLevel >= 2 && hasHelpRequest(text)) {
+    delta += 1;
+  }
+
+  if (style.reactionPreference === "low" && !hasQuestionMark(text)) {
+    delta -= 1;
+  }
+
+  if (style.directness === "soft" && isCriticalIssue(text)) {
+    delta += 1;
+  }
+
+  return Math.max(-1, Math.min(1, delta));
 }
 
 function selectReaction(text: string): FeishuEmojiType {

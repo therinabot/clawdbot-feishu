@@ -76,3 +76,76 @@ export type DynamicAgentCreationConfig = {
   agentDirTemplate?: string;
   maxAgents?: number;
 };
+
+export type CommunicationStyle = "direct" | "explicit" | "nuanced" | "diplomatic";
+export type HumorTolerance = "low" | "medium" | "high";
+export type StressThreshold = "sensitive" | "normal" | "resilient";
+export type FeedbackStyle = "direct" | "diplomatic";
+export type WorkRhythm = "flexible" | "structured";
+
+export type PersonalityProfile = {
+  userId: string;
+  userName?: string;
+  lastUpdated: string;
+  traits: {
+    communicationStyle: CommunicationStyle;
+    humorTolerance: HumorTolerance;
+    stressThreshold: StressThreshold;
+    feedbackStyle: FeedbackStyle;
+    workRhythm: WorkRhythm;
+  };
+  preferences: {
+    tone: "casual" | "neutral" | "supportive";
+    responseLength: "short" | "medium" | "long";
+    directness: "high" | "balanced" | "soft";
+    reactionPreference: "low" | "normal" | "high";
+  };
+  interactions: {
+    totalMessages: number;
+    messagesWithHumor: number;
+    stressIndicators: number;
+    lastInteraction: string | null;
+  };
+};
+
+export type PersonalitySignal = {
+  userId: string;
+  userName?: string;
+  hasHumor: boolean;
+  stressLevel: number;
+  explicitness: number;
+  nuance: number;
+  diplomacy: number;
+};
+
+export type AdaptationContext = {
+  userId: string;
+  style: {
+    tone: PersonalityProfile["preferences"]["tone"];
+    responseLength: PersonalityProfile["preferences"]["responseLength"];
+    directness: PersonalityProfile["preferences"]["directness"];
+    reactionPreference: PersonalityProfile["preferences"]["reactionPreference"];
+  };
+  stressLevel: number;
+  namingHints: string[];
+  systemHint: string;
+};
+
+export type PersonalityFeedbackOutcome = "REPLY" | "REACT" | "NO_REPLY";
+
+export type PersonalityFeedbackUpdate = {
+  userId: string;
+  messageId: string;
+  outcome: PersonalityFeedbackOutcome;
+  scoreDelta: number;
+  note?: string;
+};
+
+export type PersonalityEvent = {
+  timestamp: string;
+  userId: string;
+  messageId: string;
+  outcome: PersonalityFeedbackOutcome;
+  scoreDelta: number;
+  note?: string;
+};

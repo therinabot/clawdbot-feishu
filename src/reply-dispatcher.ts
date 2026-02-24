@@ -15,6 +15,8 @@ import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+import { applyStylePresetSafely } from "./personality-adapter.js";
+import type { AdaptationContext } from "./types.js";
 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
@@ -29,11 +31,24 @@ export type CreateFeishuReplyDispatcherParams = {
   replyToMessageId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
+  adaptationContext?: AdaptationContext;
+  forceReply?: boolean;
+  forceReplyFallbackText?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
   const core = getFeishuRuntime();
-  const { cfg, agentId, chatId, replyToMessageId, mentionTargets, accountId } = params;
+  const {
+    cfg,
+    agentId,
+    chatId,
+    replyToMessageId,
+    mentionTargets,
+    accountId,
+    adaptationContext,
+    forceReply,
+    forceReplyFallbackText,
+  } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -141,7 +156,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
+        const text = applyStylePresetSafely(payload.text ?? "", adaptationContext);
         if (!text.trim()) {
           return;
         }
@@ -218,7 +233,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onModelSelected: prefixContext.onModelSelected,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
-            const partialText = normalizeFeishuMarkdownLinks(payload.text ?? "");
+            const partialText = normalizeFeishuMarkdownLinks(
+              applyStylePresetSafely(payload.text ?? "", adaptationContext),
+            );
             if (!partialText || partialText === lastPartial) {
               return;
             }
