@@ -57,10 +57,10 @@ export function evaluateMessageScore(params: ScoringParams): ScoringResult {
     reasons.push('Question detected (+3)');
   }
 
-  // +3: Direct mention to bot
+  // +5: Direct mention to bot
   if (ctx.mentionedBot) {
-    score += 3;
-    reasons.push('Bot mentioned (+3)');
+    score += 5;
+    reasons.push('Bot mentioned (+5)');
   }
 
   // +2: Tech/work-related keywords
