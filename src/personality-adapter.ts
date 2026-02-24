@@ -47,6 +47,17 @@ export function buildSystemHint(profile: PersonalityProfile, signal: Personality
   return hints.join(" ");
 }
 
+function looksStructuredMarkdown(text: string): boolean {
+  return (
+    /`[^`\n]*`/.test(text) ||
+    /^\s{0,3}(?:[-*+]\s+|\d+\.\s+)/m.test(text) ||
+    /^#{1,6}\s+/m.test(text) ||
+    /\[[^\]]+\]\([^\)]+\)/.test(text) ||
+    /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text) ||
+    /\n\n+/.test(text)
+  );
+}
+
 export function applyStylePresetSafely(text: string, ctx?: AdaptationContext): string {
   if (!ctx) return text;
   if (!text.trim()) return text;
@@ -60,8 +71,12 @@ export function applyStylePresetSafely(text: string, ctx?: AdaptationContext): s
     out = out.replace(/^(noted|oke|okay|siap|sip)[,\s]+/i, "");
   }
 
-  // Keep personality style lightweight. Do not aggressively truncate content,
-  // because long structured updates (lists/markdown) may get cut and look broken.
+  // Important: for structured markdown-like replies (lists, headings, inline code, etc)
+  // never hard-truncate here. Let downstream chunking split safely.
+  if (looksStructuredMarkdown(out)) {
+    return out;
+  }
+
   const limit = ctx.style.responseLength === "short" ? 1200 : ctx.style.responseLength === "medium" ? 2400 : 4000;
   if (out.length > limit) {
     const clipped = out.slice(0, limit);
