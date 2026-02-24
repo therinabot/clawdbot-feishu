@@ -29,6 +29,7 @@ import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { runWithFeishuToolContext } from "./tools-common/tool-context.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 import { evaluateMessageScore, type ScoringDecision } from "./scoring.js";
+import { maybeCaptureMemoryFromScoring } from "./memory-capture.js";
 import { inferPersonalitySignal } from "./personality-infer.js";
 import { buildAdaptationContext } from "./personality-adapter.js";
 import {
@@ -604,11 +605,30 @@ export async function handleFeishuMessage(params: {
         adaptationContext,
       });
 
-      const { decision, score, reaction, reasons } = scoringResult;
+      const { decision, score, confidence, reaction, reasons } = scoringResult;
       scoringDecision = decision;
       scoringScore = score;
 
       log(`feishu[${account.accountId}]: group scoring - score=${score}, decision=${decision}, reasons=[${reasons.join(', ')}]`);
+
+      if (feishuCfg?.memoryCapture?.enabled) {
+        void maybeCaptureMemoryFromScoring({
+          cfg,
+          feishuCfg,
+          accountId: account.accountId,
+          chatId: ctx.chatId,
+          messageId: ctx.messageId,
+          senderOpenId: ctx.senderOpenId,
+          senderName: ctx.senderName,
+          content: ctx.content,
+          decision,
+          confidence,
+          score,
+          log,
+        }).catch((captureErr) => {
+          log(`feishu[${account.accountId}]: memory capture async error: ${String(captureErr)}`);
+        });
+      }
 
       // NO_REPLY: Skip entirely
       if (decision === "NO_REPLY") {

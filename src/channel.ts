@@ -97,6 +97,16 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },
         renderMode: { type: "string", enum: ["auto", "raw", "card"] },
+        memoryCapture: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            enabled: { type: "boolean" },
+            minConfidence: { type: "number", minimum: 0, maximum: 1 },
+            dedupeWindowMinutes: { type: "integer", minimum: 1 },
+            hourlyLimit: { type: "integer", minimum: 1 },
+          },
+        },
         accounts: {
           type: "object",
           additionalProperties: {
@@ -110,6 +120,16 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               verificationToken: { type: "string" },
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },
+              memoryCapture: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  enabled: { type: "boolean" },
+                  minConfidence: { type: "number", minimum: 0, maximum: 1 },
+                  dedupeWindowMinutes: { type: "integer", minimum: 1 },
+                  hourlyLimit: { type: "integer", minimum: 1 },
+                },
+              },
             },
           },
         },

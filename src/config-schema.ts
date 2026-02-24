@@ -122,6 +122,17 @@ export const ScoringConfigSchema = z
   .strict()
   .optional();
 
+export const MemoryCaptureConfigSchema = z
+  .object({
+    // Safety-first default: disabled until explicitly enabled.
+    enabled: z.boolean().optional().default(false),
+    minConfidence: z.number().min(0).max(1).optional().default(0.8),
+    dedupeWindowMinutes: z.number().int().min(1).optional().default(60),
+    hourlyLimit: z.number().int().min(1).optional().default(10),
+  })
+  .strict()
+  .optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -172,6 +183,7 @@ export const FeishuAccountConfigSchema = z
     streaming: StreamingModeSchema,
     tools: FeishuToolsConfigSchema,
     scoring: ScoringConfigSchema,
+    memoryCapture: MemoryCaptureConfigSchema,
   })
   .strict();
 
@@ -212,6 +224,8 @@ export const FeishuConfigSchema = z
     dynamicAgentCreation: DynamicAgentCreationSchema,
     // Scoring system for group chat filtering
     scoring: ScoringConfigSchema,
+    // Conservative auto memory capture for high-signal scored messages
+    memoryCapture: MemoryCaptureConfigSchema,
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
