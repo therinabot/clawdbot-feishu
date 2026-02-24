@@ -94,49 +94,8 @@ export function evaluateMessageScore(params: ScoringParams): ScoringResult {
     reasons.push('Critical work issue (+2)');
   }
 
-  // --- NEGATIVE SCORE (SUBTRACT points) ---
-
-  // -2: Casual banter
-  if (isBanter(ctx.content)) {
-    score -= 2;
-    reasons.push('Banter detected (-2)');
-  }
-
-  // -2: Reaction-only (emoji without text)
-  if (isReactionOnly(ctx.content, ctx.contentType)) {
-    score -= 2;
-    reasons.push('Reaction-only message (-2)');
-  }
-
-  // -3: 3+ human messages in rapid succession (<10s gap)
-  if (isFlowRapid(recentMessages)) {
-    score -= 3;
-    reasons.push('Rapid human chat flow (-3)');
-  }
-
-  // -2: Someone already answered clearly
-  // Note: This needs message context, simplified here
-  if (ctx.parentId) {
-    // If replying to someone, assume context exists
-    score -= 2;
-    reasons.push('Reply to message (-2)');
-  }
-
-  // -2: Personal topic (eating, going home, weekend, travel)
-  if (isPersonalTopic(ctx.content)) {
-    score -= 2;
-    reasons.push('Personal topic (-2)');
-  }
-
-  // -1: Bot replied in same thread <2 minutes ago
-  // Note: This needs bot reply history, simplified here
-  // if (botRepliedRecently(...)) { score -= 1; }
-
-  // -3: Late night (disabled per request)
-  if (!config.lateNightDisabled && isLateNight(timezone)) {
-    score -= 3;
-    reasons.push('Late night (-3)');
-  }
+  // --- NEGATIVE SCORE DISABLED (requested) ---
+  // Intentionally disabled subtract-point checks.
 
   // --- DECISION LOGIC ---
 
@@ -257,33 +216,42 @@ function isLateNight(timezone: string): boolean {
 }
 
 function selectReaction(text: string): FeishuEmojiType {
-  // Choose appropriate Feishu emoji based on context
-  // Using Feishu emoji types from reactions.ts (mapped to native platform emojis)
+  // Choose context-aware Feishu emoji for REACT decisions.
+  // Keep work/tech contexts professional (avoid random SMILE).
 
-  if (hasHumor(text)) {
-    // Humor → LAUGHING 😂
-    return FeishuEmoji.LAUGHING;
-  }
-  if (isBanter(text)) {
-    // Banter → THUMBSUP 👍
-    return FeishuEmoji.THUMBSUP;
-  }
-  if (hasQuestionMark(text)) {
-    // Question → THINKING 🤔
-    return FeishuEmoji.THINKING;
-  }
+  const techHits = detectTechKeywords(text);
+  const hasTechContext = techHits.length > 0 || hasHelpRequest(text);
+
   if (isCriticalIssue(text)) {
     // Critical issue → FIRE 🔥
     return FeishuEmoji.FIRE;
   }
 
-  // Default: random choice from positive reactions
-  const reactions: FeishuEmojiType[] = [
-    FeishuEmoji.THUMBSUP,    // 👍
-    FeishuEmoji.SMILE,        // 😊
-    FeishuEmoji.CLAP,         // 👏
-    FeishuEmoji.FIRE,         // 🔥
-    FeishuEmoji.CHECK,        // ✅
-  ];
-  return reactions[Math.floor(Math.random() * reactions.length)];
+  if (hasQuestionMark(text) && hasTechContext) {
+    // Technical question → THINKING 🤔
+    return FeishuEmoji.THINKING;
+  }
+
+  if (hasTechContext) {
+    // Work/technical update → CHECK ✅
+    return FeishuEmoji.CHECK;
+  }
+
+  if (hasHumor(text)) {
+    // Humor → LAUGHING 😂
+    return FeishuEmoji.LAUGHING;
+  }
+
+  if (isBanter(text)) {
+    // Banter → THUMBSUP 👍
+    return FeishuEmoji.THUMBSUP;
+  }
+
+  if (hasQuestionMark(text)) {
+    // General question → THINKING 🤔
+    return FeishuEmoji.THINKING;
+  }
+
+  // Safe fallback (deterministic, no random mismatch)
+  return FeishuEmoji.THUMBSUP;
 }

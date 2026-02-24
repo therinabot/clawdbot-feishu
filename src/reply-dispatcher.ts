@@ -21,50 +21,6 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
-function stripReasoningPrefix(raw: string): string {
-  const text = raw.trim();
-  if (!/^Reasoning:/i.test(text)) return text;
-
-  // Common shape: "Reasoning: ...\n\n<actual reply>"
-  const blocks = text.split(/\n\n+/);
-  if (blocks.length > 1 && /^Reasoning:/i.test(blocks[0]?.trim() ?? "")) {
-    const candidate = blocks.slice(1).join("\n\n").trim();
-    if (candidate) return candidate;
-  }
-
-  // Single-line heading then reply body on next line(s)
-  const lines = text.split("\n");
-  if (lines.length > 1 && /^Reasoning:/i.test(lines[0]?.trim() ?? "")) {
-    const candidate = lines.slice(1).join("\n").trim();
-    if (candidate) return candidate;
-  }
-
-  // Inline leak shape: "Reasoning: ... Noted, ..."
-  const inlineStart = text.search(
-    /(\[\[\s*reply_to[^\]]*\]\]|(?:Noted|Oke|Okay|Siap|Baik|Sip|Sure|Got it|Endpoint|Intinya|Berarti)\b[,:\-]?)/i,
-  );
-  if (inlineStart > 0) {
-    return text.slice(inlineStart).trim();
-  }
-
-  return text;
-}
-
-function isTransientReasoningLeak(text: string): boolean {
-  const t = text.trim();
-  if (!/^Reasoning:/i.test(t)) return false;
-
-  // If we can already recover non-reasoning content, keep it.
-  const stripped = stripReasoningPrefix(t);
-  if (stripped && stripped !== t && !/^Reasoning:/i.test(stripped)) {
-    return false;
-  }
-
-  return /^Reasoning:\s*(?:_?\*{0,3})?\s*(?:Choosing|Deciding|Crafting|Planning|Thinking|Analyzing|Checking|Preparing|Outputting|Composing|Formulating)\b/i.test(
-    t,
-  );
-}
-
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
@@ -73,8 +29,6 @@ export type CreateFeishuReplyDispatcherParams = {
   replyToMessageId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
-  forceReply?: boolean;
-  forceReplyFallbackText?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -187,21 +141,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const rawText = payload.text ?? "";
-        if (isTransientReasoningLeak(rawText)) {
-          return;
-        }
-
-        let text = stripReasoningPrefix(rawText);
-
-        // negative no-reply check removed (requested)
-
+        const text = payload.text ?? "";
         if (!text.trim()) {
-          if (params.forceReply) {
-            text = (params.forceReplyFallbackText ?? "Noted. Request lu kebaca, gua follow up sekarang.").trim();
-          } else {
-            return;
-          }
+          return;
         }
 
         const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
