@@ -612,6 +612,10 @@ export async function handleFeishuMessage(params: {
       log(`feishu[${account.accountId}]: group scoring - score=${score}, decision=${decision}, reasons=[${reasons.join(', ')}]`);
 
       if (feishuCfg?.memoryCapture?.enabled) {
+        const mentionedUserCount = (event.message.mentions ?? []).filter(
+          (mention) => mention.id.open_id && mention.id.open_id !== botOpenId,
+        ).length;
+
         void maybeCaptureMemoryFromScoring({
           cfg,
           feishuCfg,
@@ -624,6 +628,7 @@ export async function handleFeishuMessage(params: {
           decision,
           confidence,
           score,
+          mentionedUserCount,
           log,
         }).catch((captureErr) => {
           log(`feishu[${account.accountId}]: memory capture async error: ${String(captureErr)}`);

@@ -122,6 +122,17 @@ export const ScoringConfigSchema = z
   .strict()
   .optional();
 
+const MemoryCaptureNoReplyExceptionSchema = z
+  .object({
+    enabled: z.boolean().optional().default(true),
+    // Conservative threshold to prevent over-capture from NO_REPLY traffic.
+    minRelevanceScore: z.number().int().min(1).optional().default(22),
+    minMatchedCategories: z.number().int().min(1).optional().default(2),
+    requireOwnerMention: z.boolean().optional().default(true),
+  })
+  .strict()
+  .optional();
+
 export const MemoryCaptureConfigSchema = z
   .object({
     // Safety-first default: disabled until explicitly enabled.
@@ -129,6 +140,7 @@ export const MemoryCaptureConfigSchema = z
     minConfidence: z.number().min(0).max(1).optional().default(0.8),
     dedupeWindowMinutes: z.number().int().min(1).optional().default(60),
     hourlyLimit: z.number().int().min(1).optional().default(10),
+    noReplyException: MemoryCaptureNoReplyExceptionSchema,
   })
   .strict()
   .optional();

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import type { FeishuConfig } from "./types.js";
 import type { ScoringDecision } from "./scoring.js";
+import { evaluateNoReplySignal, type NoReplySignalResult } from "./memory-signal.js";
 
 const DEFAULT_WORKSPACE_ROOT = "/home/shusain/.openclaw/workspace";
 const DAILY_LOG_SECTION = "## Feishu Auto Memory Capture (v0)";
@@ -23,6 +24,7 @@ type MemoryCaptureEvent = {
   reason: string;
   summary?: string;
   summaryNormalized?: string;
+  noReplySignal?: NoReplySignalResult;
 };
 
 type MemoryCaptureResolvedConfig = {
@@ -30,6 +32,12 @@ type MemoryCaptureResolvedConfig = {
   minConfidence: number;
   dedupeWindowMinutes: number;
   hourlyLimit: number;
+  noReplyException: {
+    enabled: boolean;
+    minRelevanceScore: number;
+    minMatchedCategories: number;
+    requireOwnerMention: boolean;
+  };
 };
 
 export async function maybeCaptureMemoryFromScoring(params: {
@@ -44,6 +52,7 @@ export async function maybeCaptureMemoryFromScoring(params: {
   decision: ScoringDecision;
   confidence: number;
   score?: number | null;
+  mentionedUserCount?: number;
   log?: (msg: string) => void;
 }): Promise<void> {
   const {
@@ -58,6 +67,7 @@ export async function maybeCaptureMemoryFromScoring(params: {
     decision,
     confidence,
     score,
+    mentionedUserCount,
     log,
   } = params;
 
@@ -69,6 +79,9 @@ export async function maybeCaptureMemoryFromScoring(params: {
   const workspaceRoot = resolveWorkspaceRoot(cfg);
   const eventsPath = path.join(workspaceRoot, "memory", "state", "memory-capture-events.jsonl");
   const now = Date.now();
+
+  let captureReason = "saved";
+  let noReplySignal: NoReplySignalResult | undefined;
 
   const eventBase = {
     channel: "feishu" as const,
@@ -82,15 +95,39 @@ export async function maybeCaptureMemoryFromScoring(params: {
 
   try {
     if (decision === "NO_REPLY") {
-      await appendCaptureEvent(eventsPath, {
-        ...eventBase,
-        action: "skipped",
-        reason: "decision-no-reply",
+      if (!resolvedCfg.noReplyException.enabled) {
+        await appendCaptureEvent(eventsPath, {
+          ...eventBase,
+          action: "skipped",
+          reason: "decision-no-reply",
+        });
+        return;
+      }
+
+      noReplySignal = evaluateNoReplySignal({
+        content,
+        mentionedUserCount,
+        config: {
+          minRelevanceScore: resolvedCfg.noReplyException.minRelevanceScore,
+          minMatchedCategories: resolvedCfg.noReplyException.minMatchedCategories,
+          requireOwnerMention: resolvedCfg.noReplyException.requireOwnerMention,
+        },
       });
-      return;
+
+      if (!noReplySignal.shouldCapture) {
+        await appendCaptureEvent(eventsPath, {
+          ...eventBase,
+          action: "skipped",
+          reason: buildNoReplySkipReason(noReplySignal),
+          noReplySignal,
+        });
+        return;
+      }
+
+      captureReason = "no-reply-high-signal";
     }
 
-    if (decision !== "REPLY" && decision !== "REACT") {
+    if (decision !== "REPLY" && decision !== "REACT" && decision !== "NO_REPLY") {
       await appendCaptureEvent(eventsPath, {
         ...eventBase,
         action: "skipped",
@@ -99,7 +136,11 @@ export async function maybeCaptureMemoryFromScoring(params: {
       return;
     }
 
-    if (!Number.isFinite(confidence) || confidence < resolvedCfg.minConfidence) {
+    // Keep existing confidence rule for REPLY/REACT. NO_REPLY high-signal uses dedicated signal score.
+    if (
+      decision !== "NO_REPLY" &&
+      (!Number.isFinite(confidence) || confidence < resolvedCfg.minConfidence)
+    ) {
       await appendCaptureEvent(eventsPath, {
         ...eventBase,
         action: "skipped",
@@ -116,6 +157,7 @@ export async function maybeCaptureMemoryFromScoring(params: {
         ...eventBase,
         action: "skipped",
         reason: "summary-empty",
+        noReplySignal,
       });
       return;
     }
@@ -137,6 +179,7 @@ export async function maybeCaptureMemoryFromScoring(params: {
         reason: "rate-limit-hourly",
         summary,
         summaryNormalized,
+        noReplySignal,
       });
       return;
     }
@@ -158,6 +201,7 @@ export async function maybeCaptureMemoryFromScoring(params: {
         reason: "dedupe-recent",
         summary,
         summaryNormalized,
+        noReplySignal,
       });
       return;
     }
@@ -182,9 +226,10 @@ export async function maybeCaptureMemoryFromScoring(params: {
     await appendCaptureEvent(eventsPath, {
       ...eventBase,
       action: "saved",
-      reason: "saved",
+      reason: captureReason,
       summary,
       summaryNormalized,
+      noReplySignal,
     });
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err);
@@ -194,6 +239,7 @@ export async function maybeCaptureMemoryFromScoring(params: {
       ...eventBase,
       action: "error",
       reason: `exception:${truncateInline(message, 160)}`,
+      noReplySignal,
     }).catch(() => {
       // Do nothing. Memory capture must stay non-blocking.
     });
@@ -207,7 +253,19 @@ function resolveMemoryCaptureConfig(feishuCfg?: FeishuConfig): MemoryCaptureReso
     minConfidence: raw?.minConfidence ?? 0.8,
     dedupeWindowMinutes: raw?.dedupeWindowMinutes ?? 60,
     hourlyLimit: raw?.hourlyLimit ?? 10,
+    noReplyException: {
+      enabled: raw?.noReplyException?.enabled ?? true,
+      minRelevanceScore: raw?.noReplyException?.minRelevanceScore ?? 22,
+      minMatchedCategories: raw?.noReplyException?.minMatchedCategories ?? 2,
+      requireOwnerMention: raw?.noReplyException?.requireOwnerMention ?? true,
+    },
   };
+}
+
+function buildNoReplySkipReason(signal: NoReplySignalResult): string {
+  const categories = signal.matchedCategories.join(",") || "none";
+  const failed = signal.failedChecks.join(",") || "unknown";
+  return `decision-no-reply-low-signal(score=${signal.relevanceScore}/${signal.threshold};categories=${categories};failed=${failed})`;
 }
 
 function resolveWorkspaceRoot(cfg: ClawdbotConfig): string {
