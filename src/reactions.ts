@@ -42,6 +42,23 @@ export async function addReactionFeishu(params: {
   };
 
   if (response.code !== 0) {
+    // Lark tenants can reject unsupported emoji types (e.g., CHECK) with 231001.
+    // Fallback to THUMBSUP to keep reaction flow reliable.
+    if (response.code === 231001 && emojiType !== FeishuEmoji.THUMBSUP) {
+      const fallback = (await client.im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: FeishuEmoji.THUMBSUP } },
+      })) as { code?: number; msg?: string; data?: { reaction_id?: string } };
+
+      if (fallback.code === 0 && fallback.data?.reaction_id) {
+        return { reactionId: fallback.data.reaction_id };
+      }
+
+      throw new Error(
+        `Feishu add reaction failed (fallback THUMBSUP): ${fallback.msg || `code ${fallback.code}`}`,
+      );
+    }
+
     throw new Error(`Feishu add reaction failed: ${response.msg || `code ${response.code}`}`);
   }
 

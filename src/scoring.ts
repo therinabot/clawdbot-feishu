@@ -267,8 +267,8 @@ function selectReaction(text: string): FeishuEmojiType {
   }
 
   if (hasTechContext) {
-    // Work/technical update → CHECK ✅
-    return FeishuEmoji.CHECK;
+    // Work/technical update → THUMBSUP 👍 (widely supported on Lark/Feishu)
+    return FeishuEmoji.THUMBSUP;
   }
 
   if (hasHumor(text)) {
